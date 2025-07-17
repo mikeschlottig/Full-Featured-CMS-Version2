@@ -1,1 +1,3 @@
 This is our second go round at producting the fully functional CMS Build and Deploying to Cloudflare.  This should go smoothly since we managed to deploy the empty wrappers to Cloudflare last time.  Hopefully this time we can stick to the 6000 + lines of code and 263 Page Engineering script that I personally uploaded to ensure they are in the repository.
+
+Do not trust all the updates - judge them in context - Claude -- This is what hpapens when you put too much faith in AI - They F you.  I'm just putting every file I can find in this repo so it's avaialble for working through the kinks once we deploy THE MAIN SOURCE OF TRUTH FOR THIS REPO: the 6000+ lines of code and the 260+ page specs.
