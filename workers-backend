@@ -1,0 +1,520 @@
+https://claude.ai/public/artifacts/94056fdc-988e-4175-a752-7bcec9b4ac71
+
+// ============================================================================
+// LEVERAGE AI - CLOUDFLARE WORKERS DEPLOYMENT PACKAGE
+// Complete Markdown Publishing Pipeline Integration
+// ============================================================================
+
+export default {
+  async fetch(request, env, ctx) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+
+    // Enable CORS for all requests
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    };
+
+    // Handle preflight requests
+    if (request.method === 'OPTIONS') {
+      return new Response(null, { 
+        status: 200, 
+        headers: corsHeaders 
+      });
+    }
+
+    try {
+      // API Routes for Markdown Editor
+      if (path.startsWith('/api/publish')) {
+        return handlePublish(request, env, corsHeaders);
+      } else if (path.startsWith('/api/search')) {
+        return handleSearch(request, env, corsHeaders);
+      } else if (path.startsWith('/api/business')) {
+        return handleBusiness(request, env, corsHeaders);
+      } else if (path.startsWith('/api/admin')) {
+        return handleAdmin(request, env, corsHeaders);
+      } else if (path.startsWith('/api/templates')) {
+        return handleTemplates(request, env, corsHeaders);
+      } else if (path.startsWith('/api/analytics')) {
+        return handleAnalytics(request, env, corsHeaders);
+      }
+      
+      // Serve the directory website
+      return handleWebsite(request, env);
+
+    } catch (error) {
+      console.error('Worker error:', error);
+      return new Response(JSON.stringify({ 
+        error: 'Internal server error',
+        details: error.message 
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+  }
+};
+
+// ============================================================================
+// PUBLISH ENDPOINT - The Magic Publishing Pipeline
+// ============================================================================
+
+async function handlePublish(request, env, corsHeaders) {
+  if (request.method !== 'POST') {
+    return new Response('Method not allowed', { 
+      status: 405, 
+      headers: corsHeaders 
+    });
+  }
+
+  try {
+    const publishData = await request.json();
+    const { frontMatter, content, publishOptions = {} } = publishData;
+
+    // Validate required fields
+    if (!frontMatter.title || !frontMatter.city || !frontMatter.category) {
+      return new Response(JSON.stringify({
+        success: false,
+        error: 'Missing required fields: title, city, category'
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    // Step 1: Generate embeddings for vector database
+    const fullContent = `${frontMatter.title} ${frontMatter.description} ${content}`;
+    const embedding = await generateEmbedding(fullContent, env);
+
+    // Step 2: Create business entry in vector database
+    const vectorId = `content-${frontMatter.city}-${frontMatter.category}-${Date.now()}`;
+    
+    const metadata = {
+      content_type: 'directory_page',
+      title: frontMatter.title,
+      city: frontMatter.city.toLowerCase(),
+      category: frontMatter.category.toLowerCase(),
+      description: frontMatter.description,
+      keywords: frontMatter.keywords || '',
+      seo_priority: frontMatter.seo_priority || 'medium',
+      vector_tags: JSON.stringify(frontMatter.vector_tags || []),
+      content_hash: await generateContentHash(content),
+      published_at: new Date().toISOString(),
+      last_updated: new Date().toISOString(),
+      url_path: `/${frontMatter.category}/`,
+      subdomain: frontMatter.city
+    };
+
+    // Step 3: Upsert to Vectorize
+    await env.DIRECTORY_INDEX.upsert([{
+      id: vectorId,
+      values: embedding,
+      metadata: metadata
+    }]);
+
+    // Step 4: Store full content in KV for website serving
+    const kvKey = `content:${frontMatter.city}:${frontMatter.category}`;
+    const contentData = {
+      frontMatter,
+      content,
+      metadata,
+      generated_html: await convertMarkdownToHTML(content, frontMatter),
+      published_at: new Date().toISOString()
+    };
+    
+    await env.CACHE.put(kvKey, JSON.stringify(contentData));
+
+    // Step 5: Update sitemap
+    await updateSitemap(frontMatter.city, frontMatter.category, env);
+
+    // Step 6: Track analytics
+    if (env.ANALYTICS) {
+      env.ANALYTICS.writeDataPoint({
+        blobs: ['content_published'],
+        doubles: [1],
+        indexes: [frontMatter.city, frontMatter.category]
+      });
+    }
+
+    // Step 7: Return success with deployment URLs
+    const deploymentUrl = `https://${frontMatter.city}.oregonsmbdirectory.com${metadata.url_path}`;
+    
+    return new Response(JSON.stringify({
+      success: true,
+      vectorId: vectorId,
+      deploymentUrl: deploymentUrl,
+      metadata: metadata,
+      message: 'Content published successfully to directory network'
+    }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+
+  } catch (error) {
+    console.error('Publish error:', error);
+    return new Response(JSON.stringify({
+      success: false,
+      error: 'Publishing failed',
+      details: error.message
+    }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// ============================================================================
+// TEMPLATE MANAGEMENT
+// ============================================================================
+
+async function handleTemplates(request, env, corsHeaders) {
+  const url = new URL(request.url);
+  const templateType = url.searchParams.get('type');
+  
+  const templates = {
+    roofers: {
+      frontMatter: {
+        title: "{{city}} Roofers Directory - Expert Roofing Services",
+        description: "Find top-rated roofing contractors in {{city}}, Oregon. Compare services, read reviews, and get quotes from trusted local roofers.",
+        keywords: "{{city}} roofers, Oregon roofing contractors, roof repair {{city}}, commercial roofing",
+        city: "{{city}}",
+        category: "roofers",
+        seo_priority: "high",
+        vector_tags: ["roofing", "contractors", "{{city}}", "oregon", "home improvement"]
+      },
+      content: `# {{city}} Roofers Directory 🏠
+
+## Top-Rated Roofing Contractors in {{city}}, Oregon
+
+Finding the right roofing contractor in {{city}} doesn't have to be overwhelming. Our curated directory features licensed, insured, and highly-rated roofing professionals who understand Oregon's unique climate challenges.
+
+### Featured Roofing Companies
+
+| Company Name | Rating | Specialization | Years in Business | Contact |
+|--------------|--------|----------------|-------------------|---------|
+| **Peak Roofing Solutions** | ⭐⭐⭐⭐⭐ (4.9/5) | Commercial & Residential | 15+ years | (503) 555-0123 |
+| **Summit Roofing Co.** | ⭐⭐⭐⭐⭐ (4.8/5) | Emergency Repairs | 12+ years | (503) 555-0124 |
+| **Northwest Roof Pros** | ⭐⭐⭐⭐ (4.7/5) | Metal Roofing Specialists | 20+ years | (503) 555-0125 |
+
+### Services Offered
+
+#### Residential Roofing
+- [x] **Asphalt Shingle Installation** - Most popular choice for {{city}} homes
+- [x] **Metal Roofing** - Durable, energy-efficient option perfect for Oregon weather
+- [x] **Tile & Slate Roofing** - Premium materials for luxury homes
+- [x] **Emergency Roof Repairs** - 24/7 service for storm damage
+
+#### Commercial Roofing
+- [x] **Flat Roof Systems** - TPO, EPDM, and modified bitumen
+- [x] **Green Roof Installation** - Sustainable solutions for {{city}} businesses
+- [x] **Preventive Maintenance** - Extend roof life with regular inspections
+- [x] **Insurance Claims Assistance** - Expert help with storm damage claims
+
+### Why Choose {{city}} Roofers?
+
+> **Local Expertise**: Our contractors understand Oregon's rain, wind, and occasional snow. They use materials and techniques specifically designed for the Pacific Northwest climate.
+
+#### Weather-Resistant Solutions
+{{city}}'s wet climate demands specialized roofing approaches:
+
+\`\`\`markdown
+Recommended Materials for {{city}}:
+• Composition shingles with wind resistance rating
+• Metal roofing with proper ventilation systems  
+• TPO membrane for flat commercial roofs
+• Proper flashing and drainage systems
+\`\`\`
+
+### Get Your Free Roofing Quote
+
+**Ready to protect your investment?** Contact our featured contractors for:
+
+1. **Free In-Home Consultation** 📋
+2. **Detailed Written Estimates** 💰
+3. **Financing Options Available** 💳
+4. **Warranty-Backed Work** 🛡️
+
+---
+
+## Emergency Roofing Services
+
+⚠️ **Storm Damage?** Don't wait! {{city}} roofers offer 24/7 emergency services:
+
+| Emergency Service | Response Time | Coverage Area |
+|-------------------|---------------|---------------|
+| Leak Repairs | < 2 hours | Metro {{city}} |
+| Tarp Installation | < 1 hour | Immediate area |
+| Storm Damage Assessment | Same day | All of Oregon |
+
+> **Insurance Tip**: Document damage with photos before temporary repairs. Our contractors work directly with insurance companies to streamline your claim.
+
+### Contact Information
+
+**Ready to connect with {{city}}'s best roofers?**
+
+📞 **Call Now**: (503) ROOFING  
+🌐 **Website**: [{{city}}Roofers.com](https://{{city}}.oregonsmbdirectory.com/roofers/)  
+📧 **Email**: info@{{city}}roofers.com
+
+---
+
+*This directory is powered by LEVERAGE AI's intelligent business matching system. Content is automatically updated and optimized for local search results.*`
+    },
+    lawyers: {
+      frontMatter: {
+        title: "{{city}} Lawyers Directory - Trusted Legal Services",
+        description: "Find experienced attorneys in {{city}}, Oregon. Browse by practice area, read reviews, and connect with qualified legal professionals.",
+        keywords: "{{city}} lawyers, Oregon attorneys, legal services {{city}}, law firms",
+        city: "{{city}}",
+        category: "lawyers",
+        seo_priority: "high",
+        vector_tags: ["lawyers", "attorneys", "{{city}}", "oregon", "legal services"]
+      },
+      content: `# {{city}} Lawyers Directory ⚖️
+
+## Experienced Attorneys in {{city}}, Oregon
+
+Connect with qualified legal professionals in {{city}} who understand Oregon law and are committed to protecting your interests.
+
+### Practice Areas
+
+| Practice Area | Available Attorneys | Average Experience | Consultation |
+|---------------|--------------------|--------------------|--------------|
+| **Personal Injury** | 15+ lawyers | 12+ years | Free consultation |
+| **Family Law** | 12+ lawyers | 10+ years | Initial consultation available |
+| **Criminal Defense** | 8+ lawyers | 15+ years | 24/7 availability |
+
+### Why Choose {{city}} Lawyers?
+
+- [x] **Local Knowledge** - Deep understanding of Oregon legal system
+- [x] **Proven Track Record** - Successful case outcomes
+- [x] **Personalized Service** - Dedicated attention to your case
+
+> **Free Consultations Available** - Many attorneys offer initial consultations at no cost.
+
+📞 **Legal Helpline**: (503) LAWYERS  
+🌐 **Directory**: [{{city}}Lawyers.com](https://{{city}}.oregonsmbdirectory.com/lawyers/)`
+    }
+  };
+
+  if (templateType && templates[templateType]) {
+    return new Response(JSON.stringify(templates[templateType]), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+  }
+
+  return new Response(JSON.stringify({ 
+    available: Object.keys(templates),
+    templates: templates 
+  }), {
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
+}
+
+// ============================================================================
+// ANALYTICS ENDPOINT
+// ============================================================================
+
+async function handleAnalytics(request, env, corsHeaders) {
+  const url = new URL(request.url);
+  const action = url.searchParams.get('action');
+
+  if (action === 'content-stats') {
+    try {
+      // Get index stats from Vectorize
+      const indexStats = await env.DIRECTORY_INDEX.describe();
+      
+      // Simulate content analytics (in production, you'd query actual data)
+      const stats = {
+        totalContent: indexStats.recordCount || 0,
+        publishedThisMonth: Math.floor(Math.random() * 50) + 20,
+        vectorDimensions: indexStats.dimension || 768,
+        avgSeoScore: 87,
+        topPerformingCities: ['portland', 'salem', 'eugene', 'bend'],
+        topCategories: ['roofers', 'lawyers', 'landscaping', 'construction'],
+        recentPublications: [
+          { city: 'portland', category: 'roofers', published: '2025-01-15T10:30:00Z' },
+          { city: 'salem', category: 'lawyers', published: '2025-01-15T09:15:00Z' },
+          { city: 'eugene', category: 'landscaping', published: '2025-01-14T16:45:00Z' }
+        ]
+      };
+
+      return new Response(JSON.stringify(stats), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+
+    } catch (error) {
+      return new Response(JSON.stringify({ 
+        error: 'Failed to get analytics',
+        details: error.message 
+      }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+  }
+
+  return new Response(JSON.stringify({ error: 'Invalid analytics action' }), {
+    status: 400,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
+}
+
+// ============================================================================
+// UTILITY FUNCTIONS
+// ============================================================================
+
+// Generate embedding using Workers AI
+async function generateEmbedding(text, env) {
+  try {
+    const response = await env.AI.run('@cf/baai/bge-small-en-v1.5', {
+      text: [text]
+    });
+
+    const embedding = response.data[0];
+    if (embedding.length !== 768) {
+      throw new Error(`Expected 768 dimensions, got ${embedding.length}`);
+    }
+
+    return embedding;
+  } catch (error) {
+    console.error('Embedding generation failed:', error);
+    throw error;
+  }
+}
+
+// Generate content hash for deduplication
+async function generateContentHash(content) {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(content);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// Convert markdown to HTML (simplified)
+async function convertMarkdownToHTML(content, frontMatter) {
+  // In production, use a full markdown parser
+  let html = content
+    .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+    .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+    .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+    .replace(/\*\*(.*)\*\*/gim, '<strong>$1</strong>')
+    .replace(/\*(.*)\*/gim, '<em>$1</em>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/gim, '<a href="$2">$1</a>')
+    .replace(/^- \[x\] (.*$)/gim, '<div class="task-done">✅ $1</div>')
+    .replace(/^- \[ \] (.*$)/gim, '<div class="task-todo">⬜ $1</div>')
+    .replace(/^- (.*$)/gim, '<li>$1</li>')
+    .replace(/\n\n/gim, '</p><p>');
+
+  return html;
+}
+
+// Update sitemap
+async function updateSitemap(city, category, env) {
+  const sitemapKey = `sitemap:${city}`;
+  let sitemap = await env.CACHE.get(sitemapKey);
+  
+  if (!sitemap) {
+    sitemap = { urls: [] };
+  } else {
+    sitemap = JSON.parse(sitemap);
+  }
+
+  const url = `https://${city}.oregonsmbdirectory.com/${category}/`;
+  const existingIndex = sitemap.urls.findIndex(u => u.loc === url);
+  
+  if (existingIndex >= 0) {
+    sitemap.urls[existingIndex].lastmod = new Date().toISOString();
+  } else {
+    sitemap.urls.push({
+      loc: url,
+      lastmod: new Date().toISOString(),
+      changefreq: 'weekly',
+      priority: 0.8
+    });
+  }
+
+  await env.CACHE.put(sitemapKey, JSON.stringify(sitemap));
+}
+
+// Enhanced search functionality
+async function handleSearch(request, env, corsHeaders) {
+  try {
+    const url = new URL(request.url);
+    const query = url.searchParams.get('q');
+    const city = url.searchParams.get('city');
+    const category = url.searchParams.get('category');
+    const limit = parseInt(url.searchParams.get('limit')) || 10;
+
+    if (!query) {
+      return new Response(JSON.stringify({ error: 'Query required' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    
+    const embedding = await generateEmbedding(query, env);
+    const filter = buildSearchFilter(city, category);
+    
+    const results = await env.DIRECTORY_INDEX.query(embedding, {
+      topK: limit,
+      returnValues: false,
+      returnMetadata: 'all',
+      filter: filter
+    });
+    
+    const items = results.matches.map(match => ({
+      id: match.id,
+      score: match.score,
+      title: match.metadata.title || match.metadata.business_name,
+      city: match.metadata.city,
+      category: match.metadata.category,
+      description: match.metadata.description,
+      url: `https://${match.metadata.city}.oregonsmbdirectory.com/${match.metadata.category}/`,
+      last_updated: match.metadata.last_updated
+    }));
+    
+    return new Response(JSON.stringify({
+      query: query,
+      total: results.matches.length,
+      items: items
+    }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+
+  } catch (error) {
+    console.error('Search error:', error);
+    return new Response(JSON.stringify({ error: 'Search failed' }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+function buildSearchFilter(city, category) {
+  const filter = {};
+  if (city) filter.city = { $eq: city.toLowerCase() };
+  if (category) filter.category = { $eq: category.toLowerCase() };
+  return Object.keys(filter).length > 0 ? filter : null;
+}
+
+// Placeholder handlers
+async function handleBusiness(request, env, corsHeaders) {
+  return new Response(JSON.stringify({ message: 'Business endpoint active' }), {
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
+}
+
+async function handleAdmin(request, env, corsHeaders) {
+  return new Response(JSON.stringify({ message: 'Admin endpoint active' }), {
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
+}
+
+async function handleWebsite(request, env) {
+  return new Response('<h1>Directory Website</h1>', {
+    headers: { 'Content-Type': 'text/html' }
+  });
+}
