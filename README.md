@@ -1,0 +1,1 @@
+This is our second go round at producting the fully functional CMS Build and Deploying to Cloudflare.  This should go smoothly since we managed to deploy the empty wrappers to Cloudflare last time.  Hopefully this time we can stick to the 6000 + lines of code and 263 Page Engineering script that I personally uploaded to ensure they are in the repository.
